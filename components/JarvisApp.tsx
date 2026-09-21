@@ -2,6 +2,19 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '../lib/supabase/client'
+import { safeCalculate } from '../lib/calculator'
+
+const MAX_FILE_BYTES = 8 * 1024 * 1024
+const ALLOWED_TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'html', 'css', 'js', 'jsx', 'ts', 'tsx'])
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+
+function validateSelectedFile(file: File) {
+  if (file.size > MAX_FILE_BYTES) return 'File must be 8 MB or smaller.'
+  const ext = file.name.toLowerCase().split('.').pop() || ''
+  if (!file.type.startsWith('image/') && !ALLOWED_TEXT_EXTENSIONS.has(ext)) return 'Unsupported file type.'
+  if (file.type.startsWith('image/') && !ALLOWED_IMAGE_TYPES.has(file.type)) return 'Unsupported image type.'
+  return ''
+}
 
 type Section = 'chat' | 'dashboard' | 'tools' | 'memory' | 'tasks' | 'files' | 'settings'
 type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string }
@@ -220,6 +233,7 @@ export default function JarvisApp() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Jarvis-Client': 'web',
           Authorization: 'Bearer ' + session.access_token
         },
         body: JSON.stringify({ conversationId: active.id, message: text, memoryOn })
@@ -329,13 +343,10 @@ export default function JarvisApp() {
   }
 
   function runCalculator(expression: string) {
-    if (!/^[0-9+\-*/().%\s]+$/.test(expression)) return 'Use numbers and arithmetic operators only.'
     try {
-      const result = Function('"use strict";return (' + expression + ')')()
-      if (!Number.isFinite(Number(result))) return 'The result is not finite.'
-      return String(result)
-    } catch {
-      return 'Invalid expression.'
+      return safeCalculate(expression)
+    } catch (error: any) {
+      return error?.message || 'Invalid expression.'
     }
   }
 
@@ -364,6 +375,8 @@ export default function JarvisApp() {
     try {
       let filePayload: any = undefined
       if (selectedFile) {
+        const fileError = validateSelectedFile(selectedFile)
+        if (fileError) throw new Error(fileError)
         if (selectedFile.type.startsWith('image/')) {
           filePayload = {
             name: selectedFile.name,
@@ -372,6 +385,7 @@ export default function JarvisApp() {
           }
         } else {
           const text = await readText(selectedFile)
+          if (text.length > 120000) throw new Error('Text file must contain 120,000 characters or fewer.')
           filePayload = {
             name: selectedFile.name,
             type: selectedFile.type || 'text/plain',
