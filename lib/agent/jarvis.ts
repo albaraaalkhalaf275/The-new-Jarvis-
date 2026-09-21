@@ -150,7 +150,7 @@ export async function runJarvisAgent({
 
   const agent = new Agent({
     name: 'JARVIS',
-    model: process.env.OPENAI_MODEL || 'gpt-5.6-luna',
+    // Let the Agents SDK use its current default model (gpt-5.6-luna).
     instructions: buildInstructions(context.memories, context.memoryOn),
     tools: makeTools(context)
   })
