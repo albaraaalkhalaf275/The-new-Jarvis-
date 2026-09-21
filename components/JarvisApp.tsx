@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { createClient } from '../lib/supabase/client'
 import { useRouter } from 'next/navigation'
 
 type Message={id:string;role:'user'|'assistant'|'system';content:string;created_at:string}
