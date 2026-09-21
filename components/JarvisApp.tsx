@@ -8,7 +8,6 @@ type Conversation={id:string;title:string;updated_at:string}
 
 export default function JarvisApp(){
   const supabase=createClient()
-  const router=useRouter()
   const [user,setUser]=useState<any>(null)
   const [conversations,setConversations]=useState<Conversation[]>([])
   const [conversation,setConversation]=useState<Conversation|null>(null)
@@ -23,8 +22,12 @@ export default function JarvisApp(){
   const bottomRef=useRef<HTMLDivElement>(null)
 
   useEffect(()=>{(async()=>{
-    const {data}=await supabase.auth.getUser()
-    if(!data.user){router.replace('/login');return}
+    let {data}=await supabase.auth.getUser()
+    if(!data.user){
+      const anonymous=await supabase.auth.signInAnonymously()
+      if(anonymous.error){console.error(anonymous.error);return}
+      data={user:anonymous.data.user}
+    }
     setUser(data.user)
     await loadConversations(data.user.id)
     const {data:s}=await supabase.from('user_settings').select('voice_enabled').eq('user_id',data.user.id).maybeSingle()
@@ -102,7 +105,6 @@ export default function JarvisApp(){
         <button className="side-control" onClick={()=>setMemoryOn(!memoryOn)}>Memory <b>{memoryOn?'ON':'OFF'}</b></button>
         <button className="side-control" onClick={toggleVoice}>Voice <b>{voiceOn?'ON':'OFF'}</b></button>
         <div className="side-control">Intelligence <b>GPT-5.6</b></div>
-        <form action="/auth/signout" method="post"><button className="side-control signout">Sign out</button></form>
       </div>
     </aside>
     {sidebar&&<div className="backdrop" onClick={()=>setSidebar(false)}/>}
