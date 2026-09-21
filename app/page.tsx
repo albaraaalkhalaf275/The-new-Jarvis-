@@ -1,4 +1,4 @@
-import JarvisApp from '@/components/JarvisApp'
+import JarvisApp from '../components/JarvisApp'
 
 export default function Home() {
   return <JarvisApp />
