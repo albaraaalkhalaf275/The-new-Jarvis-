@@ -22,15 +22,16 @@ export default function JarvisApp(){
   const bottomRef=useRef<HTMLDivElement>(null)
 
   useEffect(()=>{(async()=>{
-    let {data}=await supabase.auth.getUser()
-    if(!data.user){
+    const authResult=await supabase.auth.getUser()
+    let currentUser=authResult.data.user
+    if(!currentUser){
       const anonymous=await supabase.auth.signInAnonymously()
-      if(anonymous.error){console.error(anonymous.error);return}
-      data={user:anonymous.data.user}
+      if(anonymous.error||!anonymous.data.user){console.error(anonymous.error);return}
+      currentUser=anonymous.data.user
     }
-    setUser(data.user)
-    await loadConversations(data.user.id)
-    const {data:s}=await supabase.from('user_settings').select('voice_enabled').eq('user_id',data.user.id).maybeSingle()
+    setUser(currentUser)
+    await loadConversations(currentUser.id)
+    const {data:s}=await supabase.from('user_settings').select('voice_enabled').eq('user_id',currentUser.id).maybeSingle()
     if(s)setVoiceOn(!!s.voice_enabled)
   })()},[])
 
