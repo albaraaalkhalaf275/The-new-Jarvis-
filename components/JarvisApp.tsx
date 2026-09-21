@@ -7,66 +7,94 @@ type Section = 'chat' | 'dashboard' | 'tools' | 'memory' | 'tasks' | 'files' | '
 type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string }
 type Conversation = { id: string; title: string; updated_at: string }
 type Task = { id: string; text: string; done: boolean; createdAt: number; dueDate?: string }
+type ToolId = 'search' | 'calculator' | 'calendar' | 'summarize' | 'translate' | 'analyze'
 
-const nav = [
-  ['chat', 'Chat', '◌'],
+const sections: Array<[Section, string, string]> = [
+  ['chat', 'Chat', '⌕'],
   ['dashboard', 'Dashboard', '▦'],
-  ['tools', 'Tools', '⌘'],
-  ['memory', 'Memory', '◇'],
-  ['tasks', 'Tasks', '☑'],
+  ['tools', 'Tools', '✦'],
+  ['memory', 'Memory', '◈'],
+  ['tasks', 'Tasks', '✓'],
   ['files', 'Files', '□'],
   ['settings', 'Settings', '⚙']
-] as const
+]
 
-const quick = [
-  ['search', 'Search', '⌕', 'Search the web with JARVIS'],
-  ['calculator', 'Calculator', '▦', 'Calculate an expression'],
-  ['calendar', 'Calendar', '▣', 'Open your task calendar'],
-  ['summarize', 'Summarize', '≡', 'Summarize text or a file'],
-  ['translate', 'Translate', '文', 'Translate text'],
-  ['analyze', 'Analyze', '⌁', 'Analyze a text or image file']
-] as const
+const tools: Array<[ToolId, string, string, string]> = [
+  ['search', 'Web search', '⌕', 'Search current information on the web.'],
+  ['calculator', 'Calculator', '＋', 'Calculate arithmetic locally.'],
+  ['calendar', 'Calendar', '▣', 'Open your task calendar.'],
+  ['summarize', 'Summarize', '≡', 'Summarize text or a selected file.'],
+  ['translate', 'Translate', '文', 'Translate text to another language.'],
+  ['analyze', 'Analyze file', '⌁', 'Analyze a text or image file.']
+]
 
-function localDateKey(date = new Date()) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return y + '-' + m + '-' + d
+function dateKey(date = new Date()) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
+}
+
+function formatTime(value: string) {
+  return new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function formatDay(value: string) {
+  return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+function readText(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('Could not read the file.'))
+    reader.readAsText(file)
+  })
+}
+
+function readDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('Could not read the image.'))
+    reader.readAsDataURL(file)
+  })
 }
 
 export default function JarvisApp() {
   const supabase = useMemo(() => createClient(), [])
   const [user, setUser] = useState<any>(null)
+  const [startupError, setStartupError] = useState('')
   const [section, setSection] = useState<Section>('chat')
-  const [sidebar, setSidebar] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [authError, setAuthError] = useState('')
   const [memoryOn, setMemoryOn] = useState(true)
   const [voiceOn, setVoiceOn] = useState(false)
   const [listening, setListening] = useState(false)
-  const [tool, setTool] = useState<string | null>(null)
+  const [memories, setMemories] = useState<string[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [settings, setSettings] = useState({ displayName: '', assistantName: 'JARVIS' })
+  const [tool, setTool] = useState<ToolId | null>(null)
   const [toolInput, setToolInput] = useState('')
   const [toolOutput, setToolOutput] = useState('')
   const [toolLoading, setToolLoading] = useState(false)
-  const [tasks, setTasks] = useState<Task[]>([])
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [calendarMonth, setCalendarMonth] = useState(new Date())
   const [taskInput, setTaskInput] = useState('')
   const [taskDueDate, setTaskDueDate] = useState('')
-  const [memories, setMemories] = useState<string[]>([])
-  const [settings, setSettings] = useState({ displayName: '', assistantName: 'JARVIS' })
-  const [fileName, setFileName] = useState('')
-  const [clock, setClock] = useState(new Date())
-  const [calendarMonth, setCalendarMonth] = useState(new Date())
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const recognitionRef = useRef<any>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     try {
-      setTasks(JSON.parse(localStorage.getItem('jarvis_tasks') || '[]'))
+      const saved = JSON.parse(localStorage.getItem('jarvis_tasks') || '[]')
+      if (Array.isArray(saved)) setTasks(saved)
+      const savedTheme = localStorage.getItem('jarvis_theme')
+      if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme)
     } catch {}
   }, [])
 
@@ -75,95 +103,98 @@ export default function JarvisApp() {
   }, [tasks])
 
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(new Date()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
+    localStorage.setItem('jarvis_theme', theme)
+    document.documentElement.dataset.theme = theme
+  }, [theme])
 
   useEffect(() => {
+    composerRef.current?.focus()
+  }, [conversation?.id])
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages, loading])
+
+  useEffect(() => {
+    let cancelled = false
     ;(async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession()
         let currentUser = session?.user ?? null
         if (!currentUser) {
-          const a = await supabase.auth.signInAnonymously()
-          if (a.error) throw a.error
-          currentUser = a.data.user
+          const result = await supabase.auth.signInAnonymously()
+          if (result.error) throw result.error
+          currentUser = result.data.user
         }
-        if (!currentUser) throw new Error('Could not create a JARVIS session.')
+        if (!currentUser || cancelled) throw new Error('Could not create a JARVIS session.')
         setUser(currentUser)
-        await loadConversations(currentUser.id)
 
-        const { data: s } = await supabase
-          .from('user_settings')
-          .select('voice_enabled,display_name,assistant_name')
-          .eq('user_id', currentUser.id)
-          .maybeSingle()
+        const [{ data: settingsRow }, { data: memoryRows }] = await Promise.all([
+          supabase.from('user_settings').select('voice_enabled,display_name,assistant_name').eq('user_id', currentUser.id).maybeSingle(),
+          supabase.from('memories').select('memory').eq('user_id', currentUser.id).order('updated_at', { ascending: false }).limit(50)
+        ])
 
-        if (s) {
-          setVoiceOn(!!s.voice_enabled)
-          setSettings({ displayName: s.display_name || '', assistantName: s.assistant_name || 'JARVIS' })
+        if (settingsRow) {
+          setVoiceOn(!!settingsRow.voice_enabled)
+          setSettings({
+            displayName: settingsRow.display_name || '',
+            assistantName: settingsRow.assistant_name || 'JARVIS'
+          })
         }
+        setMemories((memoryRows || []).map((row: any) => String(row.memory)))
 
-        const { data: m } = await supabase
-          .from('memories')
-          .select('memory')
+        const { data: rows, error } = await supabase
+          .from('conversations')
+          .select('id,title,updated_at')
           .eq('user_id', currentUser.id)
           .order('updated_at', { ascending: false })
-          .limit(30)
 
-        setMemories((m || []).map((x: any) => x.memory))
-      } catch (e: any) {
-        console.error(e)
-        setAuthError(e?.message || 'Could not start JARVIS.')
+        if (error) throw error
+        const list = (rows || []) as Conversation[]
+        setConversations(list)
+
+        if (list.length) {
+          await selectConversation(list[0])
+        } else {
+          await createConversation(currentUser.id)
+        }
+      } catch (error: any) {
+        if (!cancelled) setStartupError(error?.message || 'Could not start JARVIS.')
       }
     })()
+    return () => { cancelled = true }
   }, [supabase])
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
-
-  async function loadConversations(uid: string) {
-    const { data } = await supabase
-      .from('conversations')
-      .select('id,title,updated_at')
-      .eq('user_id', uid)
-      .order('updated_at', { ascending: false })
-
-    const list = (data || []) as Conversation[]
-    setConversations(list)
-    if (list.length) await selectConversation(list[0])
-    else await newConversation(uid)
-  }
-
-  async function newConversation(uid = user?.id) {
+  async function createConversation(uid = user?.id) {
     if (!uid) return
     const { data, error } = await supabase
       .from('conversations')
-      .insert({ user_id: uid, title: 'New conversation' })
+      .insert({ user_id: uid, title: 'New chat' })
       .select('id,title,updated_at')
       .single()
-
-    if (!error && data) {
-      setConversations(p => [data as Conversation, ...p])
-      setConversation(data as Conversation)
-      setMessages([])
-      setSection('chat')
-      setSidebar(false)
-    }
+    if (error || !data) return
+    setConversations(previous => [data as Conversation, ...previous.filter(item => item.id !== data.id)])
+    setConversation(data as Conversation)
+    setMessages([])
+    setSection('chat')
+    setSidebarOpen(false)
   }
 
-  async function selectConversation(c: Conversation) {
-    setConversation(c)
+  async function selectConversation(item: Conversation) {
+    setConversation(item)
     const { data } = await supabase
       .from('messages')
       .select('id,role,content,created_at')
-      .eq('conversation_id', c.id)
+      .eq('conversation_id', item.id)
       .order('created_at', { ascending: true })
-
-    setMessages((data || []).filter((m: any) => m.role === 'user' || m.role === 'assistant') as Message[])
+    setMessages((data || []).filter((message: any) => message.role === 'user' || message.role === 'assistant') as Message[])
     setSection('chat')
-    setSidebar(false)
+    setSidebarOpen(false)
+  }
+
+  function navigate(next: Section) {
+    setSection(next)
+    setSidebarOpen(false)
   }
 
   async function send(textOverride?: string) {
@@ -171,366 +202,349 @@ export default function JarvisApp() {
     if (!text || !conversation || loading) return
 
     const active = conversation
-    const first = messages.length === 0
+    const isFirstMessage = messages.length === 0
     setInput('')
     setLoading(true)
-    setMessages(p => [
-      ...p,
-      { id: crypto.randomUUID(), role: 'user', content: text, created_at: new Date().toISOString() }
-    ])
+    setMessages(previous => [...previous, {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString()
+    }])
 
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/api/chat', {
+      if (!session?.access_token) throw new Error('Your JARVIS session expired. Refresh the page and try again.')
+
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+          Authorization: 'Bearer ' + session.access_token
         },
         body: JSON.stringify({ conversationId: active.id, message: text, memoryOn })
       })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error || 'Request failed')
+      const data = await response.json()
+      if (!response.ok || data.error) throw new Error(data.error || 'Request failed.')
 
-      setMessages(p => [
-        ...p,
-        { id: crypto.randomUUID(), role: 'assistant', content: data.answer, created_at: new Date().toISOString() }
-      ])
+      const answer = String(data.answer || 'I could not generate a response.')
+      setMessages(previous => [...previous, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: answer,
+        created_at: new Date().toISOString()
+      }])
 
-      if (first && user) {
-        const title = text.length > 48 ? text.slice(0, 48).trim() + '…' : text
-        await supabase
-          .from('conversations')
-          .update({ title, updated_at: new Date().toISOString() })
-          .eq('id', active.id)
-          .eq('user_id', user.id)
-        setConversations(p => p.map(c => c.id === active.id ? { ...c, title } : c))
+      if (isFirstMessage && user) {
+        const title = text.length > 52 ? text.slice(0, 52).trim() + '…' : text
+        await supabase.from('conversations').update({
+          title,
+          updated_at: new Date().toISOString()
+        }).eq('id', active.id).eq('user_id', user.id)
+        setConversations(previous => previous.map(item => item.id === active.id ? { ...item, title } : item))
+      } else {
+        setConversations(previous => previous.map(item => item.id === active.id ? { ...item, updated_at: new Date().toISOString() } : item))
       }
 
       if (voiceOn && 'speechSynthesis' in window) {
-        speechSynthesis.cancel()
-        speechSynthesis.speak(new SpeechSynthesisUtterance(data.answer))
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(answer))
       }
-    } catch (e: any) {
-      setMessages(p => [
-        ...p,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: 'I hit an error: ' + (e?.message || 'Something went wrong.'),
-          created_at: new Date().toISOString()
-        }
-      ])
+    } catch (error: any) {
+      setMessages(previous => [...previous, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'I hit an error: ' + (error?.message || 'Something went wrong.'),
+        created_at: new Date().toISOString()
+      }])
     } finally {
       setLoading(false)
     }
   }
 
-  function openSection(next: Section) {
-    setSection(next)
-    setSidebar(false)
-  }
-
-  function openTool(id: string) {
-    setTool(id)
-    setToolInput('')
-    setToolOutput('')
-    if (id === 'calendar') {
-      setCalendarMonth(new Date())
-    }
-  }
-
-  async function runTool() {
-    if (!tool) return
-
-    if (tool === 'calculator') {
-      if (!/^[0-9+\-*/().%\s]+$/.test(toolInput)) {
-        setToolOutput('Use numbers and arithmetic operators only.')
-        return
-      }
-      try {
-        const result = Function('"use strict";return (' + toolInput + ')')()
-        if (!Number.isFinite(Number(result))) throw new Error('Result is not finite.')
-        setToolOutput(String(result))
-      } catch {
-        setToolOutput('Invalid expression.')
-      }
-      return
-    }
-
-    if (tool === 'calendar') {
-      setTool(null)
-      setSection('tasks')
-      return
-    }
-
-    if (!toolInput.trim() && tool !== 'analyze') return
-
-    setToolLoading(true)
-
-    try {
-      let filePayload: any = undefined
-
-      if (tool === 'analyze') {
-        const file = selectedFile || fileRef.current?.files?.[0]
-        if (!file) {
-          setToolOutput('Select a file first.')
-          return
-        }
-        setFileName(file.name)
-
-        if (file.type.startsWith('image/')) {
-          const imageData = await readFileAsDataUrl(file)
-          filePayload = { name: file.name, type: file.type, imageData }
-        } else if (file.type.startsWith('text/') || file.name.match(/\.(md|txt|csv|json|html|css|ts|tsx|js|jsx)$/i)) {
-          const text = await readFileAsText(file)
-          filePayload = { name: file.name, type: file.type || 'text/plain', text: text.slice(0, 120000) }
-        } else {
-          filePayload = { name: file.name, type: file.type, size: file.size }
-        }
-      }
-
-      const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/api/tool', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
-        },
-        body: JSON.stringify({ tool, input: toolInput, file: filePayload })
-      })
-
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Tool failed')
-      setToolOutput(data.output || 'No result.')
-    } catch (e: any) {
-      setToolOutput('Error: ' + (e?.message || 'Tool failed.'))
-    } finally {
-      setToolLoading(false)
-    }
-  }
-
   function startVoice() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) {
-      alert('Speech recognition is not supported in this browser.')
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setInput(previous => previous || 'Voice input is not supported in this browser.')
       return
     }
-
     if (listening) {
       recognitionRef.current?.stop()
       setListening(false)
       return
     }
-
-    const r = new SR()
-    r.lang = 'en-CA'
-    r.interimResults = false
-    r.onresult = (e: any) => setInput(e.results?.[0]?.[0]?.transcript || '')
-    r.onend = () => setListening(false)
-    r.onerror = () => setListening(false)
-    recognitionRef.current = r
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'en-CA'
+    recognition.interimResults = false
+    recognition.continuous = false
+    recognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript || ''
+      setInput(transcript)
+      setTimeout(() => composerRef.current?.focus(), 0)
+    }
+    recognition.onend = () => setListening(false)
+    recognition.onerror = () => setListening(false)
+    recognitionRef.current = recognition
     setListening(true)
-    r.start()
+    recognition.start()
   }
 
   async function toggleVoice() {
     const next = !voiceOn
     setVoiceOn(next)
     if (user) {
-      await supabase
-        .from('user_settings')
-        .upsert({ user_id: user.id, voice_enabled: next, updated_at: new Date().toISOString() })
+      await supabase.from('user_settings').upsert({
+        user_id: user.id,
+        voice_enabled: next,
+        updated_at: new Date().toISOString()
+      })
     }
   }
 
   async function saveSettings() {
     if (!user) return
-    await supabase
-      .from('user_settings')
-      .upsert({
-        user_id: user.id,
-        display_name: settings.displayName,
-        assistant_name: settings.assistantName || 'JARVIS',
-        voice_enabled: voiceOn,
-        updated_at: new Date().toISOString()
-      })
+    const name = settings.assistantName.trim() || 'JARVIS'
+    setSettings(previous => ({ ...previous, assistantName: name }))
+    await supabase.from('user_settings').upsert({
+      user_id: user.id,
+      display_name: settings.displayName.trim(),
+      assistant_name: name,
+      voice_enabled: voiceOn,
+      updated_at: new Date().toISOString()
+    })
   }
 
   function addTask() {
     const text = taskInput.trim()
     if (!text) return
-
-    setTasks(p => [
-      {
-        id: crypto.randomUUID(),
-        text,
-        done: false,
-        createdAt: Date.now(),
-        dueDate: taskDueDate || undefined
-      },
-      ...p
-    ])
-
+    setTasks(previous => [{
+      id: crypto.randomUUID(),
+      text,
+      done: false,
+      createdAt: Date.now(),
+      dueDate: taskDueDate || undefined
+    }, ...previous])
     setTaskInput('')
     setTaskDueDate('')
   }
 
+  function runCalculator(expression: string) {
+    if (!/^[0-9+\-*/().%\s]+$/.test(expression)) return 'Use numbers and arithmetic operators only.'
+    try {
+      const result = Function('"use strict";return (' + expression + ')')()
+      if (!Number.isFinite(Number(result))) return 'The result is not finite.'
+      return String(result)
+    } catch {
+      return 'Invalid expression.'
+    }
+  }
+
+  async function runTool() {
+    if (!tool) return
+    if (tool === 'calculator') {
+      setToolOutput(runCalculator(toolInput))
+      return
+    }
+    if (tool === 'calendar') {
+      setTool(null)
+      navigate('tasks')
+      return
+    }
+    if (tool === 'analyze' && !selectedFile) {
+      setToolOutput('Choose a file first.')
+      return
+    }
+    if (!toolInput.trim() && tool !== 'analyze') {
+      setToolOutput('Enter a request first.')
+      return
+    }
+
+    setToolLoading(true)
+    setToolOutput('')
+    try {
+      let filePayload: any = undefined
+      if (selectedFile) {
+        if (selectedFile.type.startsWith('image/')) {
+          filePayload = {
+            name: selectedFile.name,
+            type: selectedFile.type,
+            imageData: await readDataUrl(selectedFile)
+          }
+        } else {
+          const text = await readText(selectedFile)
+          filePayload = {
+            name: selectedFile.name,
+            type: selectedFile.type || 'text/plain',
+            text: text.slice(0, 120000)
+          }
+        }
+      }
+
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('Your JARVIS session expired. Refresh the page and try again.')
+
+      const response = await fetch('/api/tool', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + session.access_token
+        },
+        body: JSON.stringify({ tool, input: toolInput, file: filePayload })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Tool failed.')
+      setToolOutput(String(data.output || 'No result.'))
+    } catch (error: any) {
+      setToolOutput('Error: ' + (error?.message || 'Tool failed.'))
+    } finally {
+      setToolLoading(false)
+    }
+  }
+
+  function openTool(id: ToolId) {
+    setTool(id)
+    setToolInput('')
+    setToolOutput('')
+    if (id === 'calendar') setCalendarMonth(new Date())
+  }
+
   if (!user) {
     return (
-      <div className="loading-screen">
-        {authError ? (
-          <div className="startup-error">
-            <h2>JARVIS could not start</h2>
-            <p>{authError}</p>
-            <button className="hud-button primary" onClick={() => location.reload()}>Retry</button>
-          </div>
-        ) : 'Initializing JARVIS…'}
+      <div className="app-startup">
+        <div className="startup-card">
+          <div className="jarvis-mark">J</div>
+          <h1>JARVIS</h1>
+          {startupError ? (
+            <>
+              <p>{startupError}</p>
+              <button className="primary-button" onClick={() => window.location.reload()}>Retry</button>
+            </>
+          ) : <p>Starting your assistant…</p>}
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="jarvis-shell">
-      <aside className={'hud-sidebar ' + (sidebar ? 'open' : '')}>
-        <div className="brand">
-          <div className="brand-orb">◯</div>
-          <div><strong>JARVIS</strong><span>AI ASSISTANT</span></div>
+    <div className="jarvis-app">
+      <aside className={'app-sidebar ' + (sidebarOpen ? 'open' : '')}>
+        <div className="sidebar-top">
+          <button className="brand-button" onClick={() => navigate('chat')} aria-label="Go to chat">
+            <span className="brand-mark">J</span>
+            <span className="brand-name">JARVIS</span>
+          </button>
+          <button className="new-chat-button" onClick={() => createConversation()}><span>＋</span> New chat</button>
         </div>
 
-        <nav className="nav">
-          {nav.map(([id, label, icon]) => (
-            <button
-              key={id}
-              className={'nav-button ' + (section === id ? 'active' : '')}
-              onClick={() => openSection(id)}
-            >
-              <i>{icon}</i>{label}
-            </button>
-          ))}
-        </nav>
+        <div className="sidebar-scroll">
+          <div className="sidebar-section-label">Workspace</div>
+          <nav className="sidebar-nav">
+            {sections.map(([id, label, icon]) => (
+              <button key={id} className={section === id ? 'selected' : ''} onClick={() => navigate(id)}>
+                <span>{icon}</span>{label}
+              </button>
+            ))}
+          </nav>
 
-        <div className="online-card">
-          <span className="status-dot"/>
-          <div>
-            <b>JARVIS Online</b>
-            <small>Model: GPT-5.6</small>
-            <small>Memory: {memoryOn ? 'Enabled' : 'Disabled'}</small>
+          <div className="sidebar-section-label recent-label">Recent chats</div>
+          <div className="conversation-list">
+            {conversations.map(item => (
+              <button
+                key={item.id}
+                className={'conversation-item ' + (conversation?.id === item.id ? 'selected' : '')}
+                onClick={() => selectConversation(item)}
+                title={item.title}
+              >
+                <span>{item.title || 'New chat'}</span>
+              </button>
+            ))}
+            {!conversations.length && <div className="empty-sidebar">No conversations yet.</div>}
           </div>
+        </div>
+
+        <div className="sidebar-bottom">
+          <button className="account-row" onClick={() => navigate('settings')}>
+            <span className="avatar">{(settings.displayName || 'U').slice(0, 1).toUpperCase()}</span>
+            <span className="account-copy"><b>{settings.displayName || 'User'}</b><small>{user.is_anonymous ? 'Anonymous account' : 'Account'}</small></span>
+            <span>•••</span>
+          </button>
         </div>
       </aside>
 
-      {sidebar && <div className="hud-backdrop" onClick={() => setSidebar(false)}/>}
+      {sidebarOpen && <button className="sidebar-overlay" onClick={() => setSidebarOpen(false)} aria-label="Close navigation"/>}
 
-      <main className="hud-main">
-        <header className="hud-header">
-          <button className="mobile-menu" onClick={() => setSidebar(true)} aria-label="Open navigation">☰</button>
-          <div>
-            <div className="eyebrow">{section.toUpperCase()}</div>
-            <h1>
-              {section === 'chat' ? 'Good evening.'
-                : section === 'dashboard' ? 'Dashboard'
-                : section === 'tools' ? 'Tools'
-                : section === 'memory' ? 'Memory'
-                : section === 'tasks' ? 'Tasks'
-                : section === 'files' ? 'Files'
-                : 'Settings'}
-            </h1>
+      <main className="app-main">
+        <header className="topbar">
+          <div className="topbar-left">
+            <button className="mobile-menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">☰</button>
+            <button className="model-button" onClick={() => navigate('settings')} title="Open assistant settings">
+              <span className="mini-mark">J</span>
+              <b>{settings.assistantName}</b>
+              <small>GPT-5.6</small>
+              <span className="chevron">⌄</span>
+            </button>
           </div>
-          <div className="header-right">
-            <span>{clock.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
-            <strong>{clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</strong>
+          <div className="topbar-actions">
+            <button onClick={() => setMemoryOn(!memoryOn)} className={memoryOn ? 'top-action active' : 'top-action'} title="Toggle memory">
+              ◈
+            </button>
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="top-action" title="Toggle theme">
+              {theme === 'dark' ? '☼' : '☾'}
+            </button>
           </div>
         </header>
 
-        <div className="hud-grid">
-          <section className="hud-content">
-            {section === 'chat' && (
-              <ChatView
-                messages={messages}
-                loading={loading}
-                input={input}
-                setInput={setInput}
-                send={send}
-                startVoice={startVoice}
-                listening={listening}
-                conversations={conversations}
-                conversation={conversation}
-                selectConversation={selectConversation}
-                newConversation={newConversation}
-                bottomRef={bottomRef}
-                assistantName={settings.assistantName}
-                openSection={openSection}
-              />
-            )}
-
-            {section === 'dashboard' && <DashboardView messages={messages} conversations={conversations} tasks={tasks} memories={memories} openSection={openSection}/>}
-            {section === 'tools' && <ToolsView openTool={openTool}/>}
-            {section === 'memory' && <MemoryView memories={memories} memoryOn={memoryOn} setMemoryOn={setMemoryOn}/>}
-            {section === 'tasks' && (
-              <TasksView
-                tasks={tasks}
-                setTasks={setTasks}
-                taskInput={taskInput}
-                setTaskInput={setTaskInput}
-                taskDueDate={taskDueDate}
-                setTaskDueDate={setTaskDueDate}
-                addTask={addTask}
-                calendarMonth={calendarMonth}
-                setCalendarMonth={setCalendarMonth}
-              />
-            )}
-            {section === 'files' && <FilesView fileRef={fileRef} fileName={fileName} setFileName={setFileName} selectedFile={selectedFile} setSelectedFile={setSelectedFile} openTool={openTool}/>}
-            {section === 'settings' && (
-              <SettingsView
-                settings={settings}
-                setSettings={setSettings}
-                saveSettings={saveSettings}
-                voiceOn={voiceOn}
-                toggleVoice={toggleVoice}
-                memoryOn={memoryOn}
-                setMemoryOn={setMemoryOn}
-              />
-            )}
-          </section>
-
-          <aside className="hud-right">
-            <div className="panel status-panel">
-              <h3>System Status</h3>
-              {['AI Core', 'Tools', 'Memory', 'Web Search', 'Task Engine'].map(x => (
-                <div className="status-row" key={x}>
-                  <span><i className="status-dot"/> {x}</span>
-                  <b>Online</b>
-                </div>
-              ))}
-            </div>
-
-            <div className="panel quick-panel">
-              <h3>Quick Tools</h3>
-              <div className="quick-grid">
-                {quick.map(([id, label, icon, desc]) => (
-                  <button key={id} title={desc} onClick={() => openTool(id)}>
-                    <span>{icon}</span><small>{label}</small>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="quote">
-              “Intelligence is not a tool,<br/> it’s a partnership.”
-              <small>— JARVIS</small>
-            </div>
-          </aside>
+        <div className="app-body">
+          {section === 'chat' && (
+            <ChatPage
+              assistantName={settings.assistantName}
+              messages={messages}
+              input={input}
+              setInput={setInput}
+              loading={loading}
+              send={send}
+              startVoice={startVoice}
+              listening={listening}
+              composerRef={composerRef}
+              fileRef={fileRef}
+              selectedFile={selectedFile}
+              setSelectedFile={setSelectedFile}
+              openTool={openTool}
+              scrollRef={scrollRef}
+            />
+          )}
+          {section === 'dashboard' && <DashboardPage messages={messages} conversations={conversations} tasks={tasks} memories={memories} navigate={navigate}/>}
+          {section === 'tools' && <ToolsPage openTool={openTool}/>}
+          {section === 'memory' && <MemoryPage memories={memories} memoryOn={memoryOn} setMemoryOn={setMemoryOn}/>}
+          {section === 'tasks' && (
+            <TasksPage
+              tasks={tasks}
+              setTasks={setTasks}
+              taskInput={taskInput}
+              setTaskInput={setTaskInput}
+              taskDueDate={taskDueDate}
+              setTaskDueDate={setTaskDueDate}
+              addTask={addTask}
+              calendarMonth={calendarMonth}
+              setCalendarMonth={setCalendarMonth}
+            />
+          )}
+          {section === 'files' && <FilesPage fileRef={fileRef} selectedFile={selectedFile} setSelectedFile={setSelectedFile} openTool={openTool}/>}
+          {section === 'settings' && (
+            <SettingsPage
+              settings={settings}
+              setSettings={setSettings}
+              saveSettings={saveSettings}
+              voiceOn={voiceOn}
+              toggleVoice={toggleVoice}
+              memoryOn={memoryOn}
+              setMemoryOn={setMemoryOn}
+              theme={theme}
+              setTheme={setTheme}
+            />
+          )}
         </div>
       </main>
-
-      <nav className="mobile-bottom-nav">
-        <button className={section === 'chat' ? 'active' : ''} onClick={() => openSection('chat')}>◌<small>Chat</small></button>
-        <button className={section === 'tools' ? 'active' : ''} onClick={() => openSection('tools')}>⌘<small>Tools</small></button>
-        <button className={section === 'dashboard' ? 'active' : ''} onClick={() => openSection('dashboard')}>▦<small>Dashboard</small></button>
-        <button className={section === 'tasks' ? 'active' : ''} onClick={() => openSection('tasks')}>☑<small>Tasks</small></button>
-        <button onClick={() => setSidebar(true)}>☰<small>More</small></button>
-      </nav>
 
       {tool && (
         <ToolModal
@@ -544,222 +558,220 @@ export default function JarvisApp() {
           fileRef={fileRef}
           selectedFile={selectedFile}
           setSelectedFile={setSelectedFile}
-          openSection={openSection}
-          calendarMonth={calendarMonth}
-          setCalendarMonth={setCalendarMonth}
-          tasks={tasks}
+          navigate={navigate}
         />
       )}
     </div>
   )
 }
 
-function readFileAsText(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(reader.error || new Error('Could not read file.'))
-    reader.readAsText(file)
-  })
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(reader.error || new Error('Could not read image.'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function ChatView(p: any) {
-  const suggestions = ['Search the web', 'Show my tasks', 'What’s on my calendar?', 'Help me plan my day']
+function ChatPage(p: any) {
+  const suggestions = [
+    ['Search the web', 'Find current information online'],
+    ['Plan my day', 'Help organize tasks and priorities'],
+    ['Summarize something', 'Condense text into key points'],
+    ['Explain a topic', 'Give me a clear explanation']
+  ]
 
   return (
-    <div className="chat-view">
-      {!p.messages.length ? (
-        <div className="hero-welcome">
-          <div className="big-orb">◯</div>
-          <h2>How can I assist you today?</h2>
-          <p>Ask JARVIS anything. Use the tools on the right for focused actions.</p>
-        </div>
-      ) : (
-        <div className="chat-stream">
-          {p.messages.map((m: Message) => (
-            <div className={'chat-bubble ' + m.role} key={m.id}>
-              <div className="bubble-name">{m.role === 'user' ? 'You' : p.assistantName}</div>
-              <div>{m.content}</div>
+    <div className={'chat-page ' + (p.messages.length ? 'has-messages' : '')}>
+      <div className="chat-scroll" ref={p.scrollRef}>
+        {!p.messages.length ? (
+          <div className="welcome">
+            <div className="welcome-mark">J</div>
+            <h1>How can I help you{p.assistantName ? ', ' + (p.assistantName === 'JARVIS' ? 'today' : 'today') : 'today'}?</h1>
+            <p>Ask anything, or use one of the tools below.</p>
+            <div className="suggestion-grid">
+              {suggestions.map(([title, description]) => (
+                <button key={title} onClick={() => p.send(title)}>
+                  <b>{title}</b><small>{description}</small>
+                </button>
+              ))}
             </div>
-          ))}
-          {p.loading && (
-            <div className="chat-bubble assistant">
-              <div className="bubble-name">{p.assistantName}</div>
-              <div className="typing">Thinking…</div>
-            </div>
-          )}
-          <div ref={p.bottomRef}/>
-        </div>
-      )}
+          </div>
+        ) : (
+          <div className="message-list">
+            {p.messages.map((message: Message) => (
+              <article className={'message-row ' + message.role} key={message.id}>
+                <div className="message-avatar">{message.role === 'assistant' ? 'J' : 'U'}</div>
+                <div className="message-body">
+                  <div className="message-meta">
+                    <b>{message.role === 'assistant' ? p.assistantName : 'You'}</b>
+                    <time>{formatTime(message.created_at)}</time>
+                  </div>
+                  <div className="message-text">{message.content}</div>
+                </div>
+              </article>
+            ))}
+            {p.loading && (
+              <article className="message-row assistant">
+                <div className="message-avatar">J</div>
+                <div className="message-body">
+                  <div className="message-meta"><b>{p.assistantName}</b><span>Thinking</span></div>
+                  <div className="typing-dots"><i/><i/><i/></div>
+                </div>
+              </article>
+            )}
+          </div>
+        )}
+      </div>
 
-      <div className="suggestions">
-        {suggestions.map((q: string) => (
-          <button
-            key={q}
-            onClick={() => q === 'Show my tasks' || q === 'What’s on my calendar?'
-              ? p.openSection('tasks')
-              : p.send(q)}
-          >
-            {q}
+      <div className="composer-area">
+        {p.selectedFile && (
+          <div className="attachment-chip">
+            <span>□</span><b>{p.selectedFile.name}</b>
+            <button onClick={() => p.setSelectedFile(null)} aria-label="Remove attachment">×</button>
+          </div>
+        )}
+        <div className="composer">
+          <button className="composer-tool" onClick={() => p.fileRef.current?.click()} title="Attach a file">＋</button>
+          <textarea
+            ref={p.composerRef}
+            value={p.input}
+            onChange={(event: any) => p.setInput(event.target.value)}
+            onKeyDown={(event: any) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                p.send()
+              }
+            }}
+            rows={1}
+            placeholder="Message JARVIS"
+            aria-label="Message JARVIS"
+          />
+          <button className={'composer-tool ' + (p.listening ? 'listening' : '')} onClick={p.startVoice} title="Voice input">
+            {p.listening ? '■' : '◉'}
           </button>
-        ))}
-      </div>
-
-      <div className="composer-hud">
-        <button onClick={p.startVoice} aria-label="Voice input">{p.listening ? '■' : '◉'}</button>
-        <textarea
-          value={p.input}
-          onChange={e => p.setInput(e.target.value)}
-          onKeyDown={(e: any) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              p.send()
-            }
-          }}
-          placeholder="Type a message to JARVIS…"
-          rows={1}
+          <button className="send-button" onClick={() => p.send()} disabled={!p.input.trim() || p.loading} title="Send message">
+            ↑
+          </button>
+        </div>
+        <div className="composer-tools">
+          <button onClick={() => p.openTool('search')}>⌕ Web search</button>
+          <button onClick={() => p.openTool('calculator')}>＋ Calculator</button>
+          <button onClick={() => p.openTool('analyze')}>⌁ Analyze file</button>
+        </div>
+        <small className="disclaimer">JARVIS can make mistakes. Check important information.</small>
+        <input
+          ref={p.fileRef}
+          type="file"
+          hidden
+          accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx"
+          onChange={(event: any) => p.setSelectedFile(event.target.files?.[0] || null)}
         />
-        <button className="send-button" onClick={() => p.send()} disabled={!p.input.trim() || p.loading} aria-label="Send message">➤</button>
-      </div>
-
-      <div className="chat-foot">JARVIS can make mistakes. Check important information.</div>
-    </div>
-  )
-}
-
-function DashboardView({ messages, conversations, tasks, memories, openSection }: any) {
-  return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Command center.</h2>
-        <p>Your JARVIS activity at a glance.</p>
-      </div>
-
-      <div className="metric-grid">
-        <Metric label="Conversations" value={conversations.length}/>
-        <Metric label="Messages" value={messages.length}/>
-        <Metric label="Tasks" value={tasks.length}/>
-        <Metric label="Memory items" value={memories.length}/>
-      </div>
-
-      <div className="dashboard-actions">
-        <button onClick={() => openSection('chat')}>Open Chat</button>
-        <button onClick={() => openSection('tasks')}>Open Tasks</button>
-        <button onClick={() => openSection('memory')}>Open Memory</button>
-        <button onClick={() => openSection('tools')}>Open Tools</button>
-      </div>
-
-      <div className="panel activity">
-        <h3>Recent activity</h3>
-        <p>{messages.length ? 'Your current conversation contains ' + messages.length + ' messages.' : 'No activity yet. Start a conversation.'}</p>
-        <p>{tasks.length ? tasks.filter((t: Task) => t.done).length + ' of ' + tasks.length + ' tasks completed.' : 'No tasks created yet.'}</p>
       </div>
     </div>
   )
 }
 
-function Metric({ label, value }: any) {
-  return <div className="metric"><small>{label}</small><strong>{value}</strong></div>
+function DashboardPage({ messages, conversations, tasks, memories, navigate }: any) {
+  return (
+    <Page title="Dashboard" subtitle="Your assistant activity at a glance.">
+      <div className="stat-grid">
+        <Stat label="Conversations" value={conversations.length}/>
+        <Stat label="Messages" value={messages.length}/>
+        <Stat label="Open tasks" value={tasks.filter((task: Task) => !task.done).length}/>
+        <Stat label="Memories" value={memories.length}/>
+      </div>
+      <div className="content-card">
+        <div className="card-title"><b>Quick access</b><span>Go somewhere</span></div>
+        <div className="quick-actions">
+          <button onClick={() => navigate('chat')}>Open chat</button>
+          <button onClick={() => navigate('tasks')}>View tasks</button>
+          <button onClick={() => navigate('tools')}>Open tools</button>
+          <button onClick={() => navigate('memory')}>View memory</button>
+        </div>
+      </div>
+      <div className="content-card">
+        <div className="card-title"><b>Activity</b><span>Current session</span></div>
+        <p className="muted-copy">{messages.length ? 'Your current chat has ' + messages.length + ' messages.' : 'No messages in this chat yet.'}</p>
+        <p className="muted-copy">{tasks.length ? tasks.filter((task: Task) => task.done).length + ' of ' + tasks.length + ' tasks completed.' : 'No tasks have been created.'}</p>
+      </div>
+    </Page>
+  )
 }
 
-function ToolsView({ openTool }: any) {
+function Stat({ label, value }: any) {
+  return <div className="stat-card"><small>{label}</small><strong>{value}</strong></div>
+}
+
+function Page({ title, subtitle, children }: any) {
   return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Tools</h2>
-        <p>Every control below launches a real coded action.</p>
-      </div>
-      <div className="tool-cards">
-        {quick.map(([id, label, icon, desc]) => (
+    <div className="page-scroll">
+      <div className="page-heading"><h1>{title}</h1><p>{subtitle}</p></div>
+      {children}
+    </div>
+  )
+}
+
+function ToolsPage({ openTool }: any) {
+  return (
+    <Page title="Tools" subtitle="Focused actions that run real code.">
+      <div className="tool-grid">
+        {tools.map(([id, name, icon, description]) => (
           <button className="tool-card" key={id} onClick={() => openTool(id)}>
-            <span>{icon}</span><b>{label}</b><small>{desc}</small>
+            <span className="tool-icon">{icon}</span>
+            <b>{name}</b>
+            <small>{description}</small>
           </button>
         ))}
       </div>
-    </div>
+    </Page>
   )
 }
 
-function MemoryView({ memories, memoryOn, setMemoryOn }: any) {
+function MemoryPage({ memories, memoryOn, setMemoryOn }: any) {
   return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Memory</h2>
-        <p>Control what JARVIS uses as persistent context.</p>
+    <Page title="Memory" subtitle="Control the persistent context JARVIS can use.">
+      <div className="content-card setting-card">
+        <div><b>Use memory in chats</b><small>Saved memories can be included when JARVIS answers.</small></div>
+        <button className={'switch ' + (memoryOn ? 'on' : '')} onClick={() => setMemoryOn(!memoryOn)} aria-label="Toggle memory"><span/></button>
       </div>
-      <div className="panel setting-row">
-        <div><b>Memory for conversations</b><small>Use saved memories when answering.</small></div>
-        <button className={'toggle ' + (memoryOn ? 'on' : '')} onClick={() => setMemoryOn(!memoryOn)} aria-label="Toggle memory"><span/></button>
+      <div className="content-card">
+        <div className="card-title"><b>Saved memories</b><span>{memories.length}</span></div>
+        {memories.length ? memories.map((memory: string, index: number) => (
+          <div className="memory-line" key={index}>{memory}</div>
+        )) : <p className="muted-copy">No saved memories yet.</p>}
       </div>
-      <div className="panel memory-list">
-        <h3>Saved memories</h3>
-        {memories.length ? memories.map((m: string, i: number) => <div className="memory-item" key={i}>{m}</div>) : <p>No memories saved yet.</p>}
-      </div>
-    </div>
+    </Page>
   )
 }
 
-function TasksView({ tasks, setTasks, taskInput, setTaskInput, taskDueDate, setTaskDueDate, addTask, calendarMonth, setCalendarMonth }: any) {
-  const monthLabel = calendarMonth.toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })
-  const firstDay = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
-  const start = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1 - firstDay.getDay())
-  const days = Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
-    return d
+function TasksPage(p: any) {
+  const first = new Date(p.calendarMonth.getFullYear(), p.calendarMonth.getMonth(), 1)
+  const start = new Date(p.calendarMonth.getFullYear(), p.calendarMonth.getMonth(), 1 - first.getDay())
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    return date
   })
-
-  const tasksForDay = (key: string) => tasks.filter((t: Task) => t.dueDate === key)
+  const month = p.calendarMonth.toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })
 
   return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Tasks & Calendar</h2>
-        <p>Tasks are stored on this device and can have due dates.</p>
+    <Page title="Tasks" subtitle="Create tasks and give them due dates.">
+      <div className="task-compose">
+        <input value={p.taskInput} onChange={(event: any) => p.setTaskInput(event.target.value)} onKeyDown={(event: any) => event.key === 'Enter' && p.addTask()} placeholder="Add a task"/>
+        <input type="date" value={p.taskDueDate} onChange={(event: any) => p.setTaskDueDate(event.target.value)}/>
+        <button onClick={p.addTask}>Add</button>
       </div>
 
-      <div className="task-add">
-        <input value={taskInput} onChange={e => setTaskInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="Add a task…"/>
-        <input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} aria-label="Task due date"/>
-        <button onClick={addTask}>Add</button>
-      </div>
-
-      <div className="calendar-panel panel">
-        <div className="calendar-head">
-          <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}>‹</button>
-          <strong>{monthLabel}</strong>
-          <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}>›</button>
+      <div className="content-card calendar-card">
+        <div className="calendar-toolbar">
+          <button onClick={() => p.setCalendarMonth(new Date(p.calendarMonth.getFullYear(), p.calendarMonth.getMonth() - 1, 1))}>‹</button>
+          <b>{month}</b>
+          <button onClick={() => p.setCalendarMonth(new Date(p.calendarMonth.getFullYear(), p.calendarMonth.getMonth() + 1, 1))}>›</button>
         </div>
-
-        <div className="calendar-week">
-          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => <b key={d}>{d}</b>)}
-        </div>
-
+        <div className="calendar-week">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day: string) => <b key={day}>{day}</b>)}</div>
         <div className="calendar-grid">
-          {days.map(d => {
-            const key = localDateKey(d)
-            const inMonth = d.getMonth() === calendarMonth.getMonth()
-            const dayTasks = tasksForDay(key)
+          {days.map((date: Date) => {
+            const key = dateKey(date)
+            const dayTasks = p.tasks.filter((task: Task) => task.dueDate === key)
             return (
-              <button
-                key={key}
-                className={'calendar-day ' + (inMonth ? '' : 'muted') + (key === localDateKey() ? ' today' : '')}
-                onClick={() => {
-                  setTaskDueDate(key)
-                  setTaskInput(dayTasks[0]?.text || '')
-                }}
-                title={dayTasks.length ? dayTasks.map((t: Task) => t.text).join(', ') : 'Set due date to ' + key}
-              >
-                <span>{d.getDate()}</span>
+              <button key={key} className={'calendar-cell ' + (date.getMonth() === p.calendarMonth.getMonth() ? '' : 'outside') + (key === dateKey() ? ' today' : '')} onClick={() => {
+                p.setTaskDueDate(key)
+                if (dayTasks[0]) p.setTaskInput(dayTasks[0].text)
+              }}>
+                <span>{date.getDate()}</span>
                 {dayTasks.length > 0 && <i>{dayTasks.length}</i>}
               </button>
             )
@@ -767,147 +779,95 @@ function TasksView({ tasks, setTasks, taskInput, setTaskInput, taskDueDate, setT
         </div>
       </div>
 
-      <div className="panel task-list">
-        <h3>Task list</h3>
-        {tasks.length ? tasks.map((t: Task) => (
-          <div className="task-item" key={t.id}>
-            <button
-              onClick={() => setTasks((p: Task[]) => p.map(x => x.id === t.id ? { ...x, done: !x.done } : x))}
-              className={'check ' + (t.done ? 'done' : '')}
-              aria-label={t.done ? 'Mark task incomplete' : 'Mark task complete'}
-            >{t.done ? '✓' : ''}</button>
-            <span className={t.done ? 'done-text' : ''}>
-              {t.text}{t.dueDate ? <small className="task-due">Due {t.dueDate}</small> : null}
-            </span>
-            <button className="delete" onClick={() => setTasks((p: Task[]) => p.filter(x => x.id !== t.id))} aria-label="Delete task">×</button>
+      <div className="content-card">
+        <div className="card-title"><b>Task list</b><span>{p.tasks.length}</span></div>
+        {p.tasks.length ? p.tasks.map((task: Task) => (
+          <div className="task-row" key={task.id}>
+            <button className={'check-button ' + (task.done ? 'done' : '')} onClick={() => p.setTasks((previous: Task[]) => previous.map(item => item.id === task.id ? { ...item, done: !item.done } : item))} aria-label="Toggle task">
+              {task.done ? '✓' : ''}
+            </button>
+            <div className={task.done ? 'task-copy done-text' : 'task-copy'}><b>{task.text}</b>{task.dueDate && <small>Due {formatDay(task.dueDate + 'T12:00:00')}</small>}</div>
+            <button className="delete-button" onClick={() => p.setTasks((previous: Task[]) => previous.filter(item => item.id !== task.id))} aria-label="Delete task">×</button>
           </div>
-        )) : <p>No tasks yet.</p>}
+        )) : <p className="muted-copy">No tasks yet.</p>}
       </div>
-    </div>
+    </Page>
   )
 }
 
-function FilesView({ fileRef, fileName, setFileName, selectedFile, setSelectedFile, openTool }: any) {
+function FilesPage({ fileRef, selectedFile, setSelectedFile, openTool }: any) {
   return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Files</h2>
-        <p>Select a file. Analyze reads text files and sends image files as image input to the AI.</p>
-      </div>
-
-      <div className="panel upload-box">
+    <Page title="Files" subtitle="Attach text or image files to JARVIS tools.">
+      <div className="content-card file-card">
+        <div className="file-drop-icon">□</div>
+        <h3>{selectedFile?.name || 'No file selected'}</h3>
+        <p>Supported: images, TXT, Markdown, CSV, JSON, HTML, CSS, JS, TS and JSX/TSX.</p>
+        <div className="file-actions">
+          <button onClick={() => fileRef.current?.click()}>Choose file</button>
+          <button onClick={() => openTool('analyze')} disabled={!selectedFile}>Analyze file</button>
+          {selectedFile && <button onClick={() => setSelectedFile(null)}>Remove</button>}
+        </div>
         <input
           ref={fileRef}
+          hidden
           type="file"
           accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx"
-          onChange={e => { const file = e.target.files?.[0] || null; setSelectedFile(file); setFileName(file?.name || '') }}
+          onChange={(event: any) => setSelectedFile(event.target.files?.[0] || null)}
         />
-        <div className="upload-icon">□</div>
-        <b>{fileName || 'No file selected'}</b>
-        <small>File contents are processed by JARVIS when Analyze is run.</small>
-        <button onClick={() => openTool('analyze')} disabled={!fileName}>Analyze selected file</button>
       </div>
-    </div>
+    </Page>
   )
 }
 
-function SettingsView({ settings, setSettings, saveSettings, voiceOn, toggleVoice, memoryOn, setMemoryOn }: any) {
+function SettingsPage(p: any) {
   return (
-    <div className="panel-page">
-      <div className="page-title">
-        <h2>Settings</h2>
-        <p>Configure your JARVIS experience.</p>
+    <Page title="Settings" subtitle="Configure your JARVIS experience.">
+      <div className="content-card form-card">
+        <label>Display name<input value={p.settings.displayName} onChange={(event: any) => p.setSettings({ ...p.settings, displayName: event.target.value })}/></label>
+        <label>Assistant name<input value={p.settings.assistantName} onChange={(event: any) => p.setSettings({ ...p.settings, assistantName: event.target.value })}/></label>
+        <div className="setting-card"><div><b>Voice responses</b><small>Read JARVIS responses aloud.</small></div><button className={'switch ' + (p.voiceOn ? 'on' : '')} onClick={p.toggleVoice} aria-label="Toggle voice"><span/></button></div>
+        <div className="setting-card"><div><b>Memory</b><small>Use saved memories in conversations.</small></div><button className={'switch ' + (p.memoryOn ? 'on' : '')} onClick={() => p.setMemoryOn(!p.memoryOn)} aria-label="Toggle memory"><span/></button></div>
+        <div className="setting-card"><div><b>Theme</b><small>Switch between dark and light JARVIS modes.</small></div><button className="theme-choice" onClick={() => p.setTheme(p.theme === 'dark' ? 'light' : 'dark')}>{p.theme === 'dark' ? 'Dark' : 'Light'}</button></div>
+        <button className="primary-button save-button" onClick={p.saveSettings}>Save settings</button>
       </div>
-
-      <div className="panel form-panel">
-        <label>Display name
-          <input value={settings.displayName} onChange={e => setSettings({ ...settings, displayName: e.target.value })}/>
-        </label>
-
-        <label>Assistant name
-          <input value={settings.assistantName} onChange={e => setSettings({ ...settings, assistantName: e.target.value })}/>
-        </label>
-
-        <div className="setting-row">
-          <div><b>Voice responses</b><small>Speak JARVIS responses aloud.</small></div>
-          <button className={'toggle ' + (voiceOn ? 'on' : '')} onClick={toggleVoice} aria-label="Toggle voice responses"><span/></button>
-        </div>
-
-        <div className="setting-row">
-          <div><b>Memory</b><small>Use persistent memories in chats.</small></div>
-          <button className={'toggle ' + (memoryOn ? 'on' : '')} onClick={() => setMemoryOn(!memoryOn)} aria-label="Toggle memory"><span/></button>
-        </div>
-
-        <button className="hud-button primary" onClick={saveSettings}>Save settings</button>
-      </div>
-    </div>
+    </Page>
   )
 }
 
-function ToolModal({ tool, input, setInput, output, loading, run, close, fileRef, selectedFile, setSelectedFile, openSection, calendarMonth, setCalendarMonth, tasks }: any) {
-  const names: any = {
-    search: 'Web Search',
-    calculator: 'Calculator',
-    calendar: 'Calendar',
-    summarize: 'Summarize',
-    translate: 'Translate',
-    analyze: 'Analyze'
+function ToolModal(p: any) {
+  const metadata: Record<ToolId, [string, string, string]> = {
+    search: ['Web search', 'Search current information using JARVIS.', 'Search query…'],
+    calculator: ['Calculator', 'Runs arithmetic locally in your browser.', 'Example: (250 / 4) + 12'],
+    calendar: ['Calendar', 'Open your task calendar.', ''],
+    summarize: ['Summarize', 'Paste text or attach a text file.', 'Paste text to summarize…'],
+    translate: ['Translate', 'Paste text and specify the target language.', 'Example: Translate this to French: Hello'],
+    analyze: ['Analyze file', 'Send a text or image file to JARVIS for analysis.', 'Optional instructions…']
   }
-
-  const hints: any = {
-    search: 'Search the web using JARVIS web search.',
-    calculator: 'Calculate locally in your browser. Example: (250 / 4) + 12',
-    calendar: 'View and manage your dated tasks.',
-    summarize: 'Paste text or choose a text file to summarize.',
-    translate: 'Paste text and specify the target language.',
-    analyze: 'Choose a text or image file. The actual contents are sent for analysis.'
-  }
+  const [name, hint, placeholder] = metadata[p.tool as ToolId]
 
   return (
-    <div className="modal-backdrop" onClick={close}>
-      <div className="tool-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-head">
-          <div><span className="eyebrow">JARVIS TOOL</span><h2>{names[tool]}</h2></div>
-          <button onClick={close} aria-label="Close tool">×</button>
-        </div>
+    <div className="modal-layer" onClick={p.close}>
+      <div className="tool-modal" onClick={(event: any) => event.stopPropagation()}>
+        <div className="modal-heading"><div><small>JARVIS TOOL</small><h2>{name}</h2></div><button onClick={p.close} aria-label="Close">×</button></div>
+        <p>{hint}</p>
 
-        <p className="modal-hint">{hints[tool]}</p>
-
-        {tool === 'analyze' && (
-          <input
-            ref={fileRef}
-            type="file"
-            className="file-input"
-            onChange={e => setSelectedFile(e.target.files?.[0] || null)}
-            accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx"
-          />
-        )}
-
-        {tool === 'calendar' ? (
-          <div className="modal-calendar">
-            <div className="calendar-head">
-              <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}>‹</button>
-              <strong>{calendarMonth.toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })}</strong>
-              <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}>›</button>
-            </div>
-            <p>{tasks.filter((t: Task) => t.dueDate).length} dated task(s). Use Tasks to add or edit them.</p>
-            <button className="hud-button primary" onClick={() => { close(); openSection('tasks') }}>Open full calendar</button>
-          </div>
+        {p.tool === 'calendar' ? (
+          <button className="primary-button full-button" onClick={() => { p.close(); p.navigate('tasks') }}>Open calendar</button>
         ) : (
           <>
-            <textarea
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder={tool === 'translate' ? 'Translate this to French…' : 'Enter your request…'}
-              rows={6}
-            />
-            <button className="hud-button primary" onClick={run} disabled={loading}>
-              {loading ? 'Working…' : 'Run tool'}
-            </button>
+            {p.tool === 'analyze' && (
+              <div className="modal-file">
+                <button onClick={() => p.fileRef.current?.click()}>Choose file</button>
+                <span>{p.selectedFile?.name || 'No file selected'}</span>
+                <input ref={p.fileRef} hidden type="file" accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx" onChange={(event: any) => p.setSelectedFile(event.target.files?.[0] || null)}/>
+              </div>
+            )}
+            <textarea value={p.input} onChange={(event: any) => p.setInput(event.target.value)} placeholder={placeholder} rows={6}/>
+            <button className="primary-button full-button" onClick={p.run} disabled={p.loading}>{p.loading ? 'Working…' : 'Run tool'}</button>
           </>
         )}
 
-        {tool !== 'calendar' && output && <div className="tool-output">{output}</div>}
+        {p.output && <pre className="tool-result">{p.output}</pre>}
       </div>
     </div>
   )
