@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import { NextResponse } from 'next/server'
+import { createClient } from '../../../lib/supabase/server'
 
 type ToolRequest = {
   tool: string
@@ -15,6 +16,12 @@ type ToolRequest = {
 
 export async function POST(req: Request) {
   try {
+    const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || undefined
+    const supabase = await createClient(bearer)
+    const { data: claims } = await supabase.auth.getClaims(bearer)
+    const userId = claims?.claims?.sub as string | undefined
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const body = (await req.json()) as ToolRequest
     const tool = body.tool
     const input = String(body.input || '').trim()
