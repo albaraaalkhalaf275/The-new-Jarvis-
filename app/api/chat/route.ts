@@ -29,7 +29,10 @@ export async function POST(req: Request) {
     const { data: memories } = await supabase
       .from('memories').select('memory').eq('user_id',userId).order('updated_at',{ascending:false}).limit(20)
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) return NextResponse.json({ error: 'JARVIS is missing its OpenAI API key on the server. Add OPENAI_API_KEY to the Vercel project environment variables and redeploy.' }, { status: 503 })
+
+    const client = new OpenAI({ apiKey })
     const model = process.env.OPENAI_MODEL || 'gpt-5.6'
     const context = body.memoryOn === false ? 'Memory is disabled for this chat.' : (memories?.map(x=>x.memory).join('\n') || 'No saved memories.')
 
@@ -50,8 +53,10 @@ export async function POST(req: Request) {
     await supabase.from('conversations').update({updated_at:new Date().toISOString()}).eq('id',conversationId).eq('user_id',userId)
 
     return NextResponse.json({ answer })
-  } catch (e:any) {
-    console.error(e)
-    return NextResponse.json({ error: e?.message || 'Server error' }, { status: 500 })
+  } catch (e: any) {
+    console.error('JARVIS chat error:', e)
+    const status = Number(e?.status) || 500
+    const message = e?.error?.message || e?.message || 'Server error'
+    return NextResponse.json({ error: message }, { status: status >= 400 && status < 600 ? status : 500 })
   }
 }
