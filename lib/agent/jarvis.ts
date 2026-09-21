@@ -142,12 +142,23 @@ export async function runJarvisAgent({
     tools: makeTools(context)
   })
 
-  const input = [
-    ...history.map(item => ({
-      role: item.role,
-      content: item.content
-    })),
-    { role: 'user' as const, content: message }
+  const input: any[] = [
+    ...history.map(item =>
+      item.role === 'assistant'
+        ? {
+            role: 'assistant',
+            status: 'completed',
+            content: [{ type: 'output_text', text: item.content }]
+          }
+        : {
+            role: 'user',
+            content: [{ type: 'input_text', text: item.content }]
+          }
+    ),
+    {
+      role: 'user',
+      content: [{ type: 'input_text', text: message }]
+    }
   ]
 
   const result = await run(agent, input)
