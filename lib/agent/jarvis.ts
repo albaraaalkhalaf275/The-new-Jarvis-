@@ -1,5 +1,6 @@
 import { Agent, run, tool, webSearchTool } from '@openai/agents'
 import { z } from 'zod'
+import { safeCalculate } from '../calculator'
 
 type JarvisContext = {
   supabase: any
