@@ -1,7 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '../lib/supabase/client'
-import { useRouter } from 'next/navigation'
 
 type Message={id:string;role:'user'|'assistant'|'system';content:string;created_at:string}
 type Conversation={id:string;title:string;updated_at:string}
@@ -17,22 +16,31 @@ export default function JarvisApp(){
   const [sidebar,setSidebar]=useState(false)
   const [memoryOn,setMemoryOn]=useState(true)
   const [voiceOn,setVoiceOn]=useState(false)
+  const [authError,setAuthError]=useState('')
   const [listening,setListening]=useState(false)
   const recognitionRef=useRef<any>(null)
   const bottomRef=useRef<HTMLDivElement>(null)
 
   useEffect(()=>{(async()=>{
-    const authResult=await supabase.auth.getUser()
-    let currentUser=authResult.data.user
-    if(!currentUser){
-      const anonymous=await supabase.auth.signInAnonymously()
-      if(anonymous.error||!anonymous.data.user){console.error(anonymous.error);return}
-      currentUser=anonymous.data.user
+    try{
+      setAuthError('')
+      const {data:{session}}=await supabase.auth.getSession()
+      let currentUser=session?.user ?? null
+      if(!currentUser){
+        const anonymous=await supabase.auth.signInAnonymously()
+        if(anonymous.error) throw anonymous.error
+        currentUser=anonymous.data.user
+      }
+      if(!currentUser) throw new Error('Could not create a JARVIS session.')
+      setUser(currentUser)
+      await loadConversations(currentUser.id)
+      const {data:s,error:settingsError}=await supabase.from('user_settings').select('voice_enabled').eq('user_id',currentUser.id).maybeSingle()
+      if(settingsError) console.error(settingsError)
+      if(s)setVoiceOn(!!s.voice_enabled)
+    }catch(error:any){
+      console.error('JARVIS startup error:',error)
+      setAuthError(error?.message || 'Could not start JARVIS.')
     }
-    setUser(currentUser)
-    await loadConversations(currentUser.id)
-    const {data:s}=await supabase.from('user_settings').select('voice_enabled').eq('user_id',currentUser.id).maybeSingle()
-    if(s)setVoiceOn(!!s.voice_enabled)
   })()},[])
 
   useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:'smooth'})},[messages,loading])
@@ -94,7 +102,7 @@ export default function JarvisApp(){
     if(user)await supabase.from('user_settings').upsert({user_id:user.id,voice_enabled:next,updated_at:new Date().toISOString()})
   }
 
-  if(!user)return <div className="loading-screen">Loading JARVIS…</div>
+  if(!user)return <div className="loading-screen">{authError ? <><b>JARVIS could not start</b><p>{authError}</p><button className="primary" onClick={()=>window.location.reload()}>Retry</button></> : 'Loading JARVIS…'}</div>
 
   return <div className="app-shell">
     <aside className={'sidebar '+(sidebar?'open':'')}>
