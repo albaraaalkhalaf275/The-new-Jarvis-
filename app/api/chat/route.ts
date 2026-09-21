@@ -33,7 +33,7 @@ export async function POST(req: Request) {
     if (!apiKey) return NextResponse.json({ error: 'JARVIS is missing its OpenAI API key on the server. Add OPENAI_API_KEY to the Vercel project environment variables and redeploy.' }, { status: 503 })
 
     const client = new OpenAI({ apiKey })
-    const model = process.env.OPENAI_MODEL || 'gpt-5.6'
+    const model = process.env.OPENAI_MODEL || 'gpt-5.6-luna'
     const context = body.memoryOn === false ? 'Memory is disabled for this chat.' : (memories?.map(x=>x.memory).join('\n') || 'No saved memories.')
 
     const response = await client.responses.create({
