@@ -267,8 +267,12 @@ export default function JarvisApp() {
     try {
       let filePayload: any = undefined
 
-      if (tool === 'analyze' && fileRef.current?.files?.[0]) {
-        const file = fileRef.current.files[0]
+      if (tool === 'analyze') {
+        const file = selectedFile || fileRef.current?.files?.[0]
+        if (!file) {
+          setToolOutput('Select a file first.')
+          return
+        }
         setFileName(file.name)
 
         if (file.type.startsWith('image/')) {
@@ -468,7 +472,7 @@ export default function JarvisApp() {
                 setCalendarMonth={setCalendarMonth}
               />
             )}
-            {section === 'files' && <FilesView fileRef={fileRef} fileName={fileName} setFileName={setFileName} openTool={openTool}/>}
+            {section === 'files' && <FilesView fileRef={fileRef} fileName={fileName} setFileName={setFileName} selectedFile={selectedFile} setSelectedFile={setSelectedFile} openTool={openTool}/>}
             {section === 'settings' && (
               <SettingsView
                 settings={settings}
@@ -530,6 +534,8 @@ export default function JarvisApp() {
           run={runTool}
           close={() => setTool(null)}
           fileRef={fileRef}
+          selectedFile={selectedFile}
+          setSelectedFile={setSelectedFile}
           openSection={openSection}
           calendarMonth={calendarMonth}
           setCalendarMonth={setCalendarMonth}
@@ -773,7 +779,7 @@ function TasksView({ tasks, setTasks, taskInput, setTaskInput, taskDueDate, setT
   )
 }
 
-function FilesView({ fileRef, fileName, setFileName, openTool }: any) {
+function FilesView({ fileRef, fileName, setFileName, selectedFile, setSelectedFile, openTool }: any) {
   return (
     <div className="panel-page">
       <div className="page-title">
@@ -786,7 +792,7 @@ function FilesView({ fileRef, fileName, setFileName, openTool }: any) {
           ref={fileRef}
           type="file"
           accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx"
-          onChange={e => setFileName(e.target.files?.[0]?.name || '')}
+          onChange={e => { const file = e.target.files?.[0] || null; setSelectedFile(file); setFileName(file?.name || '') }}
         />
         <div className="upload-icon">□</div>
         <b>{fileName || 'No file selected'}</b>
@@ -830,7 +836,7 @@ function SettingsView({ settings, setSettings, saveSettings, voiceOn, toggleVoic
   )
 }
 
-function ToolModal({ tool, input, setInput, output, loading, run, close, fileRef, openSection, calendarMonth, setCalendarMonth, tasks }: any) {
+function ToolModal({ tool, input, setInput, output, loading, run, close, fileRef, selectedFile, setSelectedFile, openSection, calendarMonth, setCalendarMonth, tasks }: any) {
   const names: any = {
     search: 'Web Search',
     calculator: 'Calculator',
@@ -864,6 +870,7 @@ function ToolModal({ tool, input, setInput, output, loading, run, close, fileRef
             ref={fileRef}
             type="file"
             className="file-input"
+            onChange={e => setSelectedFile(e.target.files?.[0] || null)}
             accept="image/*,.txt,.md,.csv,.json,.html,.css,.js,.jsx,.ts,.tsx"
           />
         )}
