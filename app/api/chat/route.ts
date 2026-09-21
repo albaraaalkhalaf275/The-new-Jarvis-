@@ -1,25 +1,50 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '../../../lib/supabase/server'
 import { runJarvisAgent } from '../../../lib/agent/jarvis'
+import { getClientIp, rateLimit, rejectIfTooLarge, safeError, secureJson, validateRequestOrigin } from '../../../lib/security'
+import { z } from 'zod'
+
+const ChatSchema = z.object({
+  conversationId: z.string().uuid(),
+  message: z.string().trim().min(1).max(20_000),
+  memoryOn: z.boolean().optional()
+}).strict()
+
+const MAX_BODY_BYTES = 64 * 1024
 
 export async function POST(req: Request) {
   try {
+    const tooLarge = rejectIfTooLarge(req, MAX_BODY_BYTES)
+    if (tooLarge) return tooLarge
+    if (!validateRequestOrigin(req)) return secureJson({ error: 'Invalid request origin.' }, { status: 403 })
+
     const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || undefined
+    if (!bearer || bearer.length > 5000) return secureJson({ error: 'Unauthorized' }, { status: 401 })
+
     const supabase = await createClient(bearer)
     const { data: claims } = await supabase.auth.getClaims(bearer)
     const userId = claims?.claims?.sub as string | undefined
+    if (!userId) return secureJson({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const ip = getClientIp(req)
+    const limit = rateLimit(`chat:${userId}:${ip}`, 'chat')
+    if (!limit.allowed) {
+      const response = secureJson({ error: 'Too many requests. Please wait before sending another message.' }, { status: 429 })
+      response.headers.set('Retry-After', String(limit.retryAfter))
+      return response
     }
 
-    const body = await req.json()
-    const conversationId = String(body.conversationId || '')
-    const message = String(body.message || '').trim()
-
-    if (!conversationId || !message) {
-      return NextResponse.json({ error: 'Missing message' }, { status: 400 })
+    let raw: unknown
+    try {
+      raw = await req.json()
+    } catch {
+      return secureJson({ error: 'Invalid JSON body.' }, { status: 400 })
     }
+
+    const parsed = ChatSchema.safeParse(raw)
+    if (!parsed.success) return secureJson({ error: 'Invalid request.' }, { status: 400 })
+
+    const { conversationId, message, memoryOn } = parsed.data
 
     const { data: conversation } = await supabase
       .from('conversations')
@@ -28,14 +53,13 @@ export async function POST(req: Request) {
       .eq('user_id', userId)
       .single()
 
-    if (!conversation) {
-      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
-    }
+    if (!conversation) return secureJson({ error: 'Conversation not found' }, { status: 404 })
 
     const { data: history } = await supabase
       .from('messages')
       .select('role,content')
       .eq('conversation_id', conversationId)
+      .eq('user_id', userId)
       .order('created_at', { ascending: true })
       .limit(50)
 
@@ -56,8 +80,8 @@ export async function POST(req: Request) {
       .limit(100)
 
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({
-        error: 'JARVIS is missing its OpenAI API key on the server. Add OPENAI_API_KEY to the Vercel project environment variables and redeploy.'
+      return secureJson({
+        error: 'JARVIS is not configured yet. The server is missing its OpenAI API key.'
       }, { status: 503 })
     }
 
@@ -65,22 +89,24 @@ export async function POST(req: Request) {
       message,
       history: (history || []).map((item: any) => ({
         role: item.role === 'assistant' ? 'assistant' : 'user',
-        content: String(item.content)
+        content: String(item.content).slice(0, 20_000)
       })),
       memories: (memories || []).map((item: any) => ({
         id: String(item.id),
-        memory: String(item.memory)
+        memory: String(item.memory).slice(0, 5_000)
       })),
       supabase,
       userId,
-      memoryOn: body.memoryOn !== false
+      memoryOn: memoryOn !== false
     })
+
+    const answer = String(result.answer || 'I could not generate a response.').slice(0, 30_000)
 
     const { error: assistantMessageError } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       user_id: userId,
       role: 'assistant',
-      content: result.answer
+      content: answer
     })
 
     if (assistantMessageError) throw assistantMessageError
@@ -91,18 +117,12 @@ export async function POST(req: Request) {
       .eq('id', conversationId)
       .eq('user_id', userId)
 
-    return NextResponse.json({ answer: result.answer })
+    return secureJson({ answer })
   } catch (e: any) {
     console.error('JARVIS agent error:', e)
-
-    const status = Number(e?.status) || 500
-    const errorMessage =
-      e?.error?.message ||
-      e?.message ||
-      'JARVIS agent failed.'
-
-    return NextResponse.json(
-      { error: errorMessage },
+    const status = Number(e?.status)
+    return secureJson(
+      { error: safeError(e) },
       { status: status >= 400 && status < 600 ? status : 500 }
     )
   }
