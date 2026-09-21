@@ -9,20 +9,6 @@ type JarvisContext = {
   memories: Array<{ id: string; memory: string }>
 }
 
-function safeCalculate(expression: string) {
-  const cleaned = expression.replace(/,/g, '').trim()
-  if (!/^[0-9+\-*/().%\s]+$/.test(cleaned)) {
-    throw new Error('Only basic arithmetic is supported.')
-  }
-
-  const value = Function('"use strict"; return (' + cleaned + ')')()
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error('Invalid calculation.')
-  }
-
-  return String(value)
-}
-
 function buildInstructions(memories: JarvisContext['memories'], memoryOn: boolean) {
   const memoryContext = memoryOn
     ? (memories.map(x => `- [${x.id}] ${x.memory}`).join('\n') || 'No saved memories.')
