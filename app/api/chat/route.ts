@@ -5,8 +5,9 @@ import { NextResponse } from 'next/server'
 
 export async function POST(req: Request) {
   try {
-    const supabase = await createClient()
-    const { data: claims } = await supabase.auth.getClaims()
+    const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || undefined
+    const supabase = await createClient(bearer)
+    const { data: claims } = await supabase.auth.getClaims(bearer)
     const userId = claims?.claims?.sub as string | undefined
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
