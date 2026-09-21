@@ -17,8 +17,7 @@ export default function AuthForm({mode}:{mode:'login'|'signup'}) {
       ? await supabase.auth.signInWithPassword({email,password})
       : await supabase.auth.signUp({email,password})
     if(result.error){setError(result.error.message);setLoading(false);return}
-    if(mode==='signup' && !result.data.session){setError('Account created. Check your email to confirm it.')}
-    else router.push('/')
+    router.push('/')
     setLoading(false)
   }
 
